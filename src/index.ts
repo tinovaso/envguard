@@ -1,78 +1,76 @@
-export type EnvVarType = 'string' | 'number' | 'boolean';
+export type EnvType = 'string' | 'number' | 'boolean';
 
-export interface EnvVarSchema {
-  type?: EnvVarType;
+export interface FieldDef {
+  type: EnvType;
   required?: boolean;
   default?: string | number | boolean;
   description?: string;
+  validator?: (value: string) => boolean | string;
 }
 
-export type EnvSchema = Record<string, EnvVarSchema>;
+export type EnvSchema = Record<string, FieldDef>;
 
-export type ParsedEnv<T extends EnvSchema> = {
-  [K in keyof T]: T[K]['type'] extends 'number'
+export function coerce(value: string, type: EnvType): string | number | boolean {
+  switch (type) {
+    case 'number': {
+      const n = Number(value);
+      if (isNaN(n)) throw new Error(`Cannot coerce "${value}" to number`);
+      return n;
+    }
+    case 'boolean': {
+      if (value === 'true' || value === '1') return true;
+      if (value === 'false' || value === '0') return false;
+      throw new Error(`Cannot coerce "${value}" to boolean`);
+    }
+    default:
+      return value;
+  }
+}
+
+export type ParsedEnv<S extends EnvSchema> = {
+  [K in keyof S]: S[K]['type'] extends 'number'
     ? number
-    : T[K]['type'] extends 'boolean'
+    : S[K]['type'] extends 'boolean'
     ? boolean
     : string;
 };
 
-export class EnvValidationError extends Error {
-  constructor(public readonly issues: string[]) {
-    super(`Environment validation failed:\n${issues.map(i => `  - ${i}`).join('\n')}`);
-    this.name = 'EnvValidationError';
-  }
-}
-
-function coerce(key: string, raw: string, type: EnvVarType): string | number | boolean {
-  if (type === 'number') {
-    const n = Number(raw);
-    if (isNaN(n)) throw new Error(`"${key}" must be a number, got "${raw}"`);
-    return n;
-  }
-  if (type === 'boolean') {
-    if (raw === 'true' || raw === '1') return true;
-    if (raw === 'false' || raw === '0') return false;
-    throw new Error(`"${key}" must be a boolean (true/false/1/0), got "${raw}"`);
-  }
-  return raw;
-}
-
-export function validateEnv<T extends EnvSchema>(
-  schema: T,
+export function parseEnv<S extends EnvSchema>(
+  schema: S,
   env: Record<string, string | undefined> = process.env
-): ParsedEnv<T> {
-  const issues: string[] = [];
+): ParsedEnv<S> {
   const result: Record<string, unknown> = {};
 
   for (const [key, def] of Object.entries(schema)) {
-    const raw = env[key];
-    const type = def.type ?? 'string';
-    const required = def.required ?? def.default === undefined;
+    let raw = env[key];
 
-    if (raw === undefined || raw === '') {
-      if (def.default !== undefined) {
-        result[key] = def.default;
-        continue;
-      }
-      if (required) {
-        issues.push(`Missing required variable "${key}"${def.description ? ` (${def.description})` : ''}`);
-        continue;
-      }
-      result[key] = undefined;
+    if ((raw === undefined || raw === '') && def.default !== undefined) {
+      result[key] = def.default;
       continue;
     }
 
-    try {
-      result[key] = coerce(key, raw, type);
-    } catch (e) {
-      issues.push((e as Error).message);
+    if ((raw === undefined || raw === '') && def.required !== false) {
+      throw new Error(`[envguard] Missing required environment variable: ${key}`);
     }
+
+    if (raw === undefined || raw === '') {
+      continue;
+    }
+
+    if (def.validator) {
+      const outcome = def.validator(raw);
+      if (outcome !== true) {
+        const msg = typeof outcome === 'string' ? outcome : `Validation failed for ${key}`;
+        throw new Error(`[envguard] ${msg}`);
+      }
+    }
+
+    result[key] = coerce(raw, def.type);
   }
 
-  if (issues.length > 0) {
-    throw new EnvValidationError(issues);
-  }
-
-  return result as ParsedEnv<T>;
+  return result as ParsedEnv<S>;
 }
+
+export { validate } from './validate';
+export { formatReport } from './reporter';
+export type { ValidationReport, FieldReport } from './reporter';
