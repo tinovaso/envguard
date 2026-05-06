@@ -1,0 +1,13 @@
+# Typescript
+
+node_modules/
+build/
+coverage/
+*.js.map
+.env
+.next/
+*.tsbuildinfo
+dist/
+.cache/
+*.log
+.env.local
